@@ -31,14 +31,15 @@ var Resumable = function(opts){
   var $ = this;
   $.files = [];
   $.defaults = {
-    chunkSize:1*1024*1024,
+    chunkSize:4*1024*1024,
     simultaneousUploads:3,
     fileParameterName:'file',
     throttleProgressCallbacks:0.5,
     query:{},
     prioritizeFirstAndLastChunk:false,
     target:'/',
-    testChunks:true
+    testChunks:false,
+    uploadingURLs: []
   };
 
 
@@ -173,8 +174,19 @@ var Resumable = function(opts){
       // Rebuild stack of chunks from file
       $.chunks = [];
       $._prevProgress = 0;
-      for (var offset=0; offset<Math.max(Math.floor($.file.size/$.resumableObj.opts.chunkSize),1); offset++) {
-        $.chunks.push(new ResumableChunk($.resumableObj, $, offset, chunkEvent));
+      for (var offset=0; offset<Math.max(Math.ceil($.file.size/$.resumableObj.opts.chunkSize),1); offset++) {
+        //If a set of target uploading URLs is specifed (Mainly for Ooyala type of ingestions), get the url, start and end bytes
+        var options = null;
+        if($.resumableObj.opts.uploadingURLs){
+          options = {};
+          options.targetURL = $.resumableObj.opts.uploadingURLs.pop();
+
+          var matchResults = options.targetURL.match(/.+\/(.+)-([^&]+)/);
+
+          options.startByte = matchResults[1];
+          options.endByte = matchResults[2];
+        }
+        $.chunks.push(new ResumableChunk($.resumableObj, $, offset, chunkEvent, options));
       }
     }
     $.progress = function(){
@@ -197,7 +209,7 @@ var Resumable = function(opts){
     return(this);
   }
 
-  function ResumableChunk(resumableObj, fileObj, offset, callback){
+  function ResumableChunk(resumableObj, fileObj, offset, callback, options){
     var $ = this;
     $.resumableObj = resumableObj;
     $.fileObj = fileObj;
@@ -206,11 +218,13 @@ var Resumable = function(opts){
     $.callback = callback;
     $.lastProgressCallback = (new Date);
     $.tested = false;
+    $.options = options || {};
+    $.targetURL = $.options.targetURL || $.resumableObj.opts.targetURL;
 
     // Computed properties
     $.loaded = 0;
-    $.startByte = $.offset*$.resumableObj.opts.chunkSize;
-    $.endByte = ($.offset+1)*$.resumableObj.opts.chunkSize;
+    $.startByte = $.options.startByte ? $.options.startByte :  $.offset*$.resumableObj.opts.chunkSize;
+    $.endByte = $.options.endByte ? $.options.endByte : ($.offset+1)*$.resumableObj.opts.chunkSize;
     if ($.fileObjSize-$.endByte < $.resumableObj.opts.chunkSize) {
       // The last chunk will be bigger than the chunk size, but less than 2*chunkSize
       $.endByte = $.fileObjSize;
@@ -302,8 +316,7 @@ var Resumable = function(opts){
       // Append the relevant chunk and send it
       var func = ($.fileObj.file.mozSlice ? 'mozSlice' : ($.fileObj.file.webkitSlice ? 'webkitSlice' : 'slice'));
       formData.append($.resumableObj.opts.fileParameterName, $.fileObj.file[func]($.startByte,$.endByte));
-      $.xhr.open("POST", $.resumableObj.opts.target);
-      //$.xhr.open("POST", '/sandbox');
+      $.xhr.open("POST", $.targetURL);
       $.xhr.send(formData);
     }
     $.abort = function(){
